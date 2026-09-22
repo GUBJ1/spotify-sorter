@@ -52,15 +52,27 @@ def all_pages(client: spotipy.Spotify, first_page: dict[str, Any]) -> list[dict[
 
 
 def valid_tracks(items: Iterable[TrackItem]) -> tuple[list[TrackItem], int]:
-    """Filtrera bort borttagna eller otillgängliga poster."""
+    """Normalisera och filtrera bort borttagna eller otillgängliga poster.
+
+    Spotify bytte fältnamn från ``track`` till ``item`` i februari 2026.
+    Internt behåller vi ``track`` så att resten av sorteringslogiken är
+    oberoende av vilken svarsversion Spotipy returnerar.
+    """
     valid: list[TrackItem] = []
     skipped = 0
-    for item in items:
-        track = item.get("track")
-        if not track or not track.get("uri") or not track.get("artists"):
+    for playlist_item in items:
+        track = playlist_item.get("item", playlist_item.get("track"))
+        if (
+            not isinstance(track, dict)
+            or track.get("type") not in {None, "track"}
+            or not track.get("uri")
+            or not track.get("artists")
+        ):
             skipped += 1
             continue
-        valid.append(item)
+        normalized = dict(playlist_item)
+        normalized["track"] = track
+        valid.append(normalized)
     return valid, skipped
 
 
@@ -170,7 +182,14 @@ def main() -> None:
         print(f"{index}: {playlist['name']}")
     playlist = choose_playlist(owned)
 
-    raw_tracks = all_pages(client, spotify_call(client.playlist_items, playlist["id"]))
+    raw_tracks = all_pages(
+        client,
+        spotify_call(
+            client.playlist_items,
+            playlist["id"],
+            additional_types=("track",),
+        ),
+    )
     tracks, skipped = valid_tracks(raw_tracks)
     print(f"Hämtade {len(tracks)} låtar.")
     if skipped:
@@ -199,8 +218,7 @@ def main() -> None:
         return
 
     new_playlist = spotify_call(
-        client.user_playlist_create,
-        user_id,
+        client.current_user_playlist_create,
         name=f"{playlist['name']} (sorterad)",
         public=False,
     )

@@ -1,2 +1,2 @@
-spotipy>=2.24,<3
+spotipy>=2.26,<3
 python-dotenv>=1,<2

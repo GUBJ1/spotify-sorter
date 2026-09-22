@@ -4,8 +4,16 @@ from unittest.mock import patch
 import spotify_sorter as sorter
 
 
-def item(uri: str, artist: str, title: str, date: str):
-    return {"track": {"uri": uri, "name": title, "artists": [{"name": artist}], "album": {"release_date": date}}}
+def item(uri: str, artist: str, title: str, date: str, field: str = "item"):
+    return {
+        field: {
+            "uri": uri,
+            "name": title,
+            "artists": [{"name": artist}],
+            "album": {"release_date": date},
+            "type": "track",
+        }
+    }
 
 
 class FakeSpotify:
@@ -18,11 +26,25 @@ class FakeSpotify:
 
 class SpotifySorterTests(unittest.TestCase):
     def setUp(self):
-        self.tracks = [
+        raw_tracks = [
             item("spotify:track:2", "Zebra", "Second", "2024"),
             item("spotify:track:1", "Alpha", "First", "2023-02-01"),
             item("spotify:track:3", "Alpha", "Third", "2023-01"),
         ]
+        self.tracks, skipped = sorter.valid_tracks(raw_tracks)
+        self.assertEqual(skipped, 0)
+
+    def test_current_item_field_is_normalized(self):
+        raw = item("spotify:track:1", "Alpha", "First", "2023")
+        valid, skipped = sorter.valid_tracks([raw])
+        self.assertEqual(skipped, 0)
+        self.assertEqual(valid[0]["track"]["uri"], "spotify:track:1")
+
+    def test_legacy_track_field_is_still_supported(self):
+        raw = item("spotify:track:1", "Alpha", "First", "2023", field="track")
+        valid, skipped = sorter.valid_tracks([raw])
+        self.assertEqual(skipped, 0)
+        self.assertEqual(valid[0]["track"]["uri"], "spotify:track:1")
 
     def test_artist_sort(self):
         result = sorter.sort_tracks(self.tracks, "1")
@@ -33,9 +55,16 @@ class SpotifySorterTests(unittest.TestCase):
         self.assertEqual([track["track"]["uri"] for track in result], ["spotify:track:2", "spotify:track:1", "spotify:track:3"])
 
     def test_invalid_tracks_are_skipped(self):
-        valid, skipped = sorter.valid_tracks([self.tracks[0], {"track": None}, {"track": {"uri": None}}])
+        valid, skipped = sorter.valid_tracks(
+            [
+                item("spotify:track:1", "Alpha", "First", "2023"),
+                {"item": None},
+                {"item": {"uri": None}},
+                {"item": {"uri": "spotify:episode:1", "type": "episode"}},
+            ]
+        )
         self.assertEqual(len(valid), 1)
-        self.assertEqual(skipped, 2)
+        self.assertEqual(skipped, 3)
 
     @patch.object(sorter, "spotify_call", side_effect=lambda operation, *args, **kwargs: operation(*args, **kwargs))
     def test_reorder_moves_without_deleting(self, _spotify_call):
@@ -47,7 +76,7 @@ class SpotifySorterTests(unittest.TestCase):
     @patch.object(sorter, "spotify_call", side_effect=lambda operation, *args, **kwargs: operation(*args, **kwargs))
     def test_reorder_handles_duplicate_uris(self, _spotify_call):
         fake = FakeSpotify()
-        duplicate = item("spotify:track:1", "Alpha", "First", "2023")
+        duplicate = sorter.valid_tracks([item("spotify:track:1", "Alpha", "First", "2023")])[0][0]
         current = [duplicate, self.tracks[0], duplicate]
         target = [duplicate, duplicate, self.tracks[0]]
         sorter.reorder_playlist(fake, "playlist", current, target)
